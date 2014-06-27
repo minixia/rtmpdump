@@ -37,10 +37,10 @@
 #define RD_SUCCESS		0
 #define RD_FAILED		1
 #define RD_INCOMPLETE		2
-#define HTTP_THREAD_NUM		1000
 
 #define PACKET_SIZE 1024*1024
 
+#define HTTP_THREAD_NUM 1000
 #ifdef WIN32
 #define InitSockets()	{\
         WORD version;			\
@@ -70,12 +70,12 @@ typedef struct
 
 } STREAMING_SERVER;
 
-STREAMING_SERVER*[] httpServers = 0;
+STREAMING_SERVER *httpServers[HTTP_THREAD_NUM];
+int allStopped = 0;
 
 STREAMING_SERVER *startStreaming(const char *address, int port);
 void stopStreaming(STREAMING_SERVER * server);
 void stopAllStreamings();
-bool stopped = false;
 
 typedef struct
 {
@@ -98,8 +98,7 @@ typedef struct
   AVal flashVer;
   AVal token;
   AVal subscribepath;
-  AVal usherToken; // Justin.tv auth token
-  AVal WeebToken;  // Weeb.tv auth token
+  AVal usherToken; //Justin.tv auth token
   AVal sockshost;
   AMFObject extras;
   int edepth;
@@ -271,18 +270,6 @@ http_unescape(char *data)
   data[dst_x] = '\0';
 }
 
-void
-stopAllStreamings()
-{ 
-	int i = 0;
-	for(i = 0;i < HTTP_THREAD_NUM;i++)
-	{
-		STREAMING_SERVER httpServer = httpServers[i];
-		stopStreaming(httpServer);
-	}
-    stopped = true;
-}
-
 TFTYPE
 controlServerThread(void *unused)
 {
@@ -294,8 +281,8 @@ controlServerThread(void *unused)
 	{
 	case 'q':
 	  RTMP_LogPrintf("Exiting\n");
-      stopAllStreamings();
-      exit(0);
+	  stopAllStreamings();
+	  exit(0);
 	  break;
 	default:
 	  RTMP_LogPrintf("Unknown command \'%c\', ignoring\n", ich);
@@ -569,7 +556,7 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   RTMP_Init(&rtmp);
   RTMP_SetBufferMS(&rtmp, req.bufferTime);
   RTMP_SetupStream(&rtmp, req.protocol, &req.hostname, req.rtmpport, &req.sockshost,
-		   &req.playpath, &req.tcUrl, &req.swfUrl, &req.pageUrl, &req.app, &req.auth, &req.swfHash, req.swfSize, &req.flashVer, &req.subscribepath, &req.usherToken, &req.WeebToken, dSeek, req.dStopOffset,
+		   &req.playpath, &req.tcUrl, &req.swfUrl, &req.pageUrl, &req.app, &req.auth, &req.swfHash, req.swfSize, &req.flashVer, &req.subscribepath, &req.usherToken, dSeek, req.dStopOffset,
 		   req.bLiveStream, req.timeout);
   /* backward compatibility, we always sent this as true before */
   if (req.auth.av_len)
@@ -579,66 +566,69 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   rtmp.Link.token = req.token;
   rtmp.m_read.timestamp = dSeek;
 
+  while(server->state != STREAMING_STOPPING)
+  {
   RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
   if (!RTMP_Connect(&rtmp, NULL))
-  {
-	  RTMP_LogPrintf("%s, failed to connect!\n", __FUNCTION__);
-  }
+    {
+      RTMP_LogPrintf("%s, failed to connect!\n", __FUNCTION__);
+      sleep(1);
+    }
   else
-  {
-	  unsigned long size = 0;
-	  double percent = 0;
-	  double duration = 0.0;
+    {
+      unsigned long size = 0;
+      double percent = 0;
+      double duration = 0.0;
 
-	  int nWritten = 0;
-	  int nRead = 0;
-	  while(server->state != STREAMING_STOPPING){
-		  do
-		  {
-			  nRead = RTMP_Read(&rtmp, buffer, PACKET_SIZE);
+      int nWritten = 0;
+      int nRead = 0;
 
-			  if (nRead > 0)
-			  {
-				  if ((nWritten = send(sockfd, buffer, nRead, 0)) < 0)
-				  {
-					  RTMP_Log(RTMP_LOGERROR, "%s, sending failed, error: %d", __FUNCTION__,
-							  GetSockError());
-					  goto cleanup;	// we are in STREAMING_IN_PROGRESS, so we'll go to STREAMING_ACCEPTING
-				  }
+      do
+	{
+	  nRead = RTMP_Read(&rtmp, buffer, PACKET_SIZE);
 
-				  size += nRead;
+	  if (nRead > 0)
+	    {
+	      if ((nWritten = send(sockfd, buffer, nRead, 0)) < 0)
+		{
+		  RTMP_Log(RTMP_LOGERROR, "%s, sending failed, error: %d", __FUNCTION__,
+		      GetSockError());
+		  goto cleanup;	// we are in STREAMING_IN_PROGRESS, so we'll go to STREAMING_ACCEPTING
+		}
 
-				  //RTMP_LogPrintf("write %dbytes (%.1f KB)\n", nRead, nRead/1024.0);
-				  if (duration <= 0)	// if duration unknown try to get it from the stream (onMetaData)
-					  duration = RTMP_GetDuration(&rtmp);
+	      size += nRead;
 
-				  if (duration > 0)
-				  {
-					  percent =
-						  ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
-						  1000.0) * 100.0;
-					  percent = ((double) (int) (percent * 10.0)) / 10.0;
-					  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
-							  (double) size / 1024.0,
-							  (double) (rtmp.m_read.timestamp) / 1000.0, percent);
-				  }
-				  else
-				  {
-					  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
-							  (double) (rtmp.m_read.timestamp) / 1000.0);
-				  }
-			  }
+	      //RTMP_LogPrintf("write %dbytes (%.1f KB)\n", nRead, nRead/1024.0);
+	      if (duration <= 0)	// if duration unknown try to get it from the stream (onMetaData)
+		duration = RTMP_GetDuration(&rtmp);
+
+	      if (duration > 0)
+		{
+		  percent =
+		    ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
+							   1000.0) * 100.0;
+		  percent = ((double) (int) (percent * 10.0)) / 10.0;
+		  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
+			    (double) size / 1024.0,
+			    (double) (rtmp.m_read.timestamp) / 1000.0, percent);
+		}
+	      else
+		{
+		  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
+			    (double) (rtmp.m_read.timestamp) / 1000.0);
+		}
+	    }
 #ifdef _DEBUG
-			  else
-			  {
-				  RTMP_Log(RTMP_LOGDEBUG, "zero read!");
-			  }
+	  else
+	    {
+	      RTMP_Log(RTMP_LOGDEBUG, "zero read!");
+	    }
 #endif
-		  }while (server->state == STREAMING_IN_PROGRESS && nRead > -1
-				  && RTMP_IsConnected(&rtmp) && nWritten >= 0);
-		  RTMP_Log(RTMP_LOGWARNING, "rtmp connect broken, reconnect...");
-	  }
-  }
+	}
+      while (server->state == STREAMING_IN_PROGRESS && nRead > -1
+	     && RTMP_IsConnected(&rtmp) && nWritten >= 0);
+    }
+    }
 cleanup:
   RTMP_LogPrintf("Closing connection... ");
   RTMP_Close(&rtmp);
@@ -672,27 +662,26 @@ serverThread(void *arg)
   STREAMING_SERVER *server = arg;
   server->state = STREAMING_ACCEPTING;
 
-  while (!stopped)
-  {
-	  struct sockaddr_in addr;
-	  socklen_t addrlen = sizeof(struct sockaddr_in);
-	  int sockfd =
-		  accept(server->socket, (struct sockaddr *) &addr, &addrlen);
+  while (server->state == STREAMING_ACCEPTING)
+    {
+      struct sockaddr_in addr;
+      socklen_t addrlen = sizeof(struct sockaddr_in);
+      int sockfd =
+	accept(server->socket, (struct sockaddr *) &addr, &addrlen);
 
-	  if (sockfd > 0)
-	  {
-		  // Create a new process and transfer the control to that
-		  RTMP_Log(RTMP_LOGDEBUG, "%s: accepted connection from %s\n", __FUNCTION__,
-				  inet_ntoa(addr.sin_addr));
-		  processTCPrequest(server, sockfd);
-		  RTMP_Log(RTMP_LOGDEBUG, "%s: processed request\n", __FUNCTION__);
-	  }
-	  else
-	  {
-		  RTMP_Log(RTMP_LOGERROR, "%s: accept failed", __FUNCTION__);
-          stopped = true;
-	  }
-  }
+      if (sockfd > 0)
+	{
+	  // Create a new process and transfer the control to that
+	  RTMP_Log(RTMP_LOGDEBUG, "%s: accepted connection from %s\n", __FUNCTION__,
+	      inet_ntoa(addr.sin_addr));
+	  processTCPrequest(server, sockfd);
+	  RTMP_Log(RTMP_LOGDEBUG, "%s: processed request\n", __FUNCTION__);
+	}
+      else
+	{
+	  RTMP_Log(RTMP_LOGERROR, "%s: accept failed", __FUNCTION__);
+	}
+    }
   server->state = STREAMING_STOPPED;
   TFRET();
 }
@@ -738,6 +727,17 @@ startStreaming(const char *address, int port)
   return server;
 }
 
+void 
+stopAllStreamings()
+{
+  int i = 0;
+  for(i = 0 ;i < HTTP_THREAD_NUM;i++)
+  {
+    stopStreaming(httpServers[i]);
+  }
+  allStopped = 1;
+}
+
 void
 stopStreaming(STREAMING_SERVER * server)
 {
@@ -768,8 +768,7 @@ sigIntHandler(int sig)
 {
   RTMP_ctrlC = TRUE;
   RTMP_LogPrintf("Caught signal: %d, cleaning up, just a second...\n", sig);
-  if (httpServers)
-    stopAllStreamings();
+  stopAllStreamings();
   signal(SIGINT, SIG_DFL);
 }
 
@@ -975,9 +974,6 @@ ParseOption(char opt, char *arg, RTMP_REQUEST * req)
     case 'j':
       STR2AVAL(req->usherToken, arg);
       break;
-    case 'J':
-      STR2AVAL(req->WeebToken, arg);
-      break;
     default:
       RTMP_LogPrintf("unknown option: %c, arg: %s\n", opt, arg);
       return FALSE;
@@ -1049,7 +1045,6 @@ main(int argc, char **argv)
     {"quiet", 0, NULL, 'q'},
     {"verbose", 0, NULL, 'V'},
     {"jtv", 1, NULL, 'j'},
-    {"weeb", 1, NULL, 'J'},
     {0, 0, 0, 0}
   };
 
@@ -1062,7 +1057,7 @@ main(int argc, char **argv)
 
   while ((opt =
 	  getopt_long(argc, argv,
-		      "hvqVzr:s:t:p:a:f:u:n:c:l:y:m:d:D:A:B:T:g:w:x:W:X:S:j:J:", longopts,
+		      "hvqVzr:s:t:p:a:f:u:n:c:l:y:m:d:D:A:B:T:g:w:x:W:X:S:j:", longopts,
 		      NULL)) != -1)
     {
       switch (opt)
@@ -1124,8 +1119,6 @@ main(int argc, char **argv)
 	    ("--token|-T key          Key for SecureToken response\n");
 	  RTMP_LogPrintf
 	    ("--jtv|-j JSON           Authentication token for Justin.tv legacy servers\n");
-	  RTMP_LogPrintf
-	    ("--weeb|-J string        Authentication token for weeb.tv servers\n");
 	  RTMP_LogPrintf
 	    ("--buffer|-b             Buffer time in milliseconds (default: %u)\n\n",
 	     defaultRTMPRequest.bufferTime);
@@ -1189,23 +1182,20 @@ main(int argc, char **argv)
   // start text UI
   ThreadCreate(controlServerThread, 0);
 
-  httpServers = new STREAMING_SERVER*[HTTP_THREAD_NUM];
-  int i = 0;
-  for(int i = 0;i < HTTP_THREAD_NUM;i++)
+  int i=0;
+  for(i=0;i<HTTP_THREAD_NUM;i++)
   {
 	  // start http streaming
-	  if ((httpServer =
-				  startStreaming(httpStreamingDevice, nHttpStreamingPort)) == 0)
+	  if( startStreaming(httpStreamingDevice, nHttpStreamingPort) == 0)
 	  {
 		  RTMP_Log(RTMP_LOGERROR, "Failed to start HTTP server, exiting!");
 		  return RD_FAILED;
 	  }
-      httpServers[i] = httpServer;
 	  RTMP_LogPrintf("Streaming on http://%s:%d\n", httpStreamingDevice,
 			  nHttpStreamingPort);
   }
-
-  while (!stopped)
+  
+  while (allStopped != 1)
     {
       sleep(1);
     }
