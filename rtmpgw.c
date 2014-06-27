@@ -37,6 +37,7 @@
 #define RD_SUCCESS		0
 #define RD_FAILED		1
 #define RD_INCOMPLETE		2
+#define HTTP_THREAD_NUM		1000
 
 #define PACKET_SIZE 1024*1024
 
@@ -69,10 +70,12 @@ typedef struct
 
 } STREAMING_SERVER;
 
-STREAMING_SERVER *httpServer = 0;	// server structure pointer
+STREAMING_SERVER*[] httpServers = 0;
 
 STREAMING_SERVER *startStreaming(const char *address, int port);
 void stopStreaming(STREAMING_SERVER * server);
+void stopAllStreamings();
+bool stopped = false;
 
 typedef struct
 {
@@ -268,6 +271,18 @@ http_unescape(char *data)
   data[dst_x] = '\0';
 }
 
+void
+stopAllStreamings()
+{ 
+	int i = 0;
+	for(i = 0;i < HTTP_THREAD_NUM;i++)
+	{
+		STREAMING_SERVER httpServer = httpServers[i];
+		stopStreaming(httpServer);
+	}
+    stopped = true;
+}
+
 TFTYPE
 controlServerThread(void *unused)
 {
@@ -279,8 +294,8 @@ controlServerThread(void *unused)
 	{
 	case 'q':
 	  RTMP_LogPrintf("Exiting\n");
-	  stopStreaming(httpServer);
-	  exit(0);
+      stopAllStreamings();
+      exit(0);
 	  break;
 	default:
 	  RTMP_LogPrintf("Unknown command \'%c\', ignoring\n", ich);
@@ -577,7 +592,7 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 
 	  int nWritten = 0;
 	  int nRead = 0;
-	  while(true){
+	  while(server->state != STREAMING_STOPPING){
 		  do
 		  {
 			  nRead = RTMP_Read(&rtmp, buffer, PACKET_SIZE);
@@ -657,26 +672,27 @@ serverThread(void *arg)
   STREAMING_SERVER *server = arg;
   server->state = STREAMING_ACCEPTING;
 
-  while (server->state == STREAMING_ACCEPTING)
-    {
-      struct sockaddr_in addr;
-      socklen_t addrlen = sizeof(struct sockaddr_in);
-      int sockfd =
-	accept(server->socket, (struct sockaddr *) &addr, &addrlen);
+  while (!stopped)
+  {
+	  struct sockaddr_in addr;
+	  socklen_t addrlen = sizeof(struct sockaddr_in);
+	  int sockfd =
+		  accept(server->socket, (struct sockaddr *) &addr, &addrlen);
 
-      if (sockfd > 0)
-	{
-	  // Create a new process and transfer the control to that
-	  RTMP_Log(RTMP_LOGDEBUG, "%s: accepted connection from %s\n", __FUNCTION__,
-	      inet_ntoa(addr.sin_addr));
-	  processTCPrequest(server, sockfd);
-	  RTMP_Log(RTMP_LOGDEBUG, "%s: processed request\n", __FUNCTION__);
-	}
-      else
-	{
-	  RTMP_Log(RTMP_LOGERROR, "%s: accept failed", __FUNCTION__);
-	}
-    }
+	  if (sockfd > 0)
+	  {
+		  // Create a new process and transfer the control to that
+		  RTMP_Log(RTMP_LOGDEBUG, "%s: accepted connection from %s\n", __FUNCTION__,
+				  inet_ntoa(addr.sin_addr));
+		  processTCPrequest(server, sockfd);
+		  RTMP_Log(RTMP_LOGDEBUG, "%s: processed request\n", __FUNCTION__);
+	  }
+	  else
+	  {
+		  RTMP_Log(RTMP_LOGERROR, "%s: accept failed", __FUNCTION__);
+          stopped = true;
+	  }
+  }
   server->state = STREAMING_STOPPED;
   TFRET();
 }
@@ -752,8 +768,8 @@ sigIntHandler(int sig)
 {
   RTMP_ctrlC = TRUE;
   RTMP_LogPrintf("Caught signal: %d, cleaning up, just a second...\n", sig);
-  if (httpServer)
-    stopStreaming(httpServer);
+  if (httpServers)
+    stopAllStreamings();
   signal(SIGINT, SIG_DFL);
 }
 
@@ -1173,17 +1189,23 @@ main(int argc, char **argv)
   // start text UI
   ThreadCreate(controlServerThread, 0);
 
-  // start http streaming
-  if ((httpServer =
-       startStreaming(httpStreamingDevice, nHttpStreamingPort)) == 0)
-    {
-      RTMP_Log(RTMP_LOGERROR, "Failed to start HTTP server, exiting!");
-      return RD_FAILED;
-    }
-  RTMP_LogPrintf("Streaming on http://%s:%d\n", httpStreamingDevice,
-	    nHttpStreamingPort);
+  httpServers = new STREAMING_SERVER*[HTTP_THREAD_NUM];
+  int i = 0;
+  for(int i = 0;i < HTTP_THREAD_NUM;i++)
+  {
+	  // start http streaming
+	  if ((httpServer =
+				  startStreaming(httpStreamingDevice, nHttpStreamingPort)) == 0)
+	  {
+		  RTMP_Log(RTMP_LOGERROR, "Failed to start HTTP server, exiting!");
+		  return RD_FAILED;
+	  }
+      httpServers[i] = httpServer;
+	  RTMP_LogPrintf("Streaming on http://%s:%d\n", httpStreamingDevice,
+			  nHttpStreamingPort);
+  }
 
-  while (httpServer->state != STREAMING_STOPPED)
+  while (!stopped)
     {
       sleep(1);
     }
