@@ -719,11 +719,14 @@ startStreaming(const char *address, int port)
       return 0;
     }
 
-  server = (STREAMING_SERVER *) calloc(1, sizeof(STREAMING_SERVER));
-  server->socket = sockfd;
+  int i=0;
+  for(i=0;i<HTTP_THREAD_NUM;i++)
+  {
+    server = (STREAMING_SERVER *) calloc(1, sizeof(STREAMING_SERVER));
+    server->socket = sockfd;
 
-  ThreadCreate(serverThread, server);
-
+    ThreadCreate(serverThread, server);
+  }
   return server;
 }
 
@@ -1182,18 +1185,14 @@ main(int argc, char **argv)
   // start text UI
   ThreadCreate(controlServerThread, 0);
 
-  int i=0;
-  for(i=0;i<HTTP_THREAD_NUM;i++)
+  // start http streaming
+  if( startStreaming(httpStreamingDevice, nHttpStreamingPort) == 0)
   {
-	  // start http streaming
-	  if( startStreaming(httpStreamingDevice, nHttpStreamingPort) == 0)
-	  {
-		  RTMP_Log(RTMP_LOGERROR, "Failed to start HTTP server, exiting!");
-		  return RD_FAILED;
-	  }
-	  RTMP_LogPrintf("Streaming on http://%s:%d\n", httpStreamingDevice,
-			  nHttpStreamingPort);
+	  RTMP_Log(RTMP_LOGERROR, "Failed to start HTTP server, exiting!");
+	  return RD_FAILED;
   }
+  RTMP_LogPrintf("Streaming on http://%s:%d\n", httpStreamingDevice,
+		  nHttpStreamingPort);
   
   while (allStopped != 1)
     {
