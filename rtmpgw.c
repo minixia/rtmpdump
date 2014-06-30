@@ -568,67 +568,73 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 
   while(server->state != STREAMING_STOPPING)
   {
-  RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
-  if (!RTMP_Connect(&rtmp, NULL))
-    {
-      RTMP_LogPrintf("%s, failed to connect!\n", __FUNCTION__);
-      sleep(1);
-    }
-  else
-    {
-      unsigned long size = 0;
-      double percent = 0;
-      double duration = 0.0;
-
-      int nWritten = 0;
-      int nRead = 0;
-
-      do
-	{
-	  nRead = RTMP_Read(&rtmp, buffer, PACKET_SIZE);
-
-	  if (nRead > 0)
-	    {
-	      if ((nWritten = send(sockfd, buffer, nRead, 0)) < 0)
-		{
-		  RTMP_Log(RTMP_LOGERROR, "%s, sending failed, error: %d", __FUNCTION__,
-		      GetSockError());
-		  goto cleanup;	// we are in STREAMING_IN_PROGRESS, so we'll go to STREAMING_ACCEPTING
-		}
-
-	      size += nRead;
-
-	      //RTMP_LogPrintf("write %dbytes (%.1f KB)\n", nRead, nRead/1024.0);
-	      if (duration <= 0)	// if duration unknown try to get it from the stream (onMetaData)
-		duration = RTMP_GetDuration(&rtmp);
-
-	      if (duration > 0)
-		{
-		  percent =
-		    ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
-							   1000.0) * 100.0;
-		  percent = ((double) (int) (percent * 10.0)) / 10.0;
-		  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
-			    (double) size / 1024.0,
-			    (double) (rtmp.m_read.timestamp) / 1000.0, percent);
-		}
-	      else
-		{
-		  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
-			    (double) (rtmp.m_read.timestamp) / 1000.0);
-		}
-	    }
-#ifdef _DEBUG
+	  RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
+	  if (!RTMP_Connect(&rtmp, NULL))
+	  {
+		  RTMP_LogPrintf("%s, failed to connect!\n", __FUNCTION__);
+		  sleep(1);
+	  }
 	  else
-	    {
-	      RTMP_Log(RTMP_LOGDEBUG, "zero read!");
-	    }
+	  {
+		  unsigned long size = 0;
+		  double percent = 0;
+		  double duration = 0.0;
+
+		  int nWritten = 0;
+		  int nRead = 0;
+
+		  do
+		  {
+			  nRead = RTMP_Read(&rtmp, buffer, PACKET_SIZE);
+
+			  if (nRead > 0)
+			  {
+				  if ((nWritten = send(sockfd, buffer, nRead, 0)) < 0)
+				  {
+					  RTMP_Log(RTMP_LOGERROR, "%s, sending failed, error: %d", __FUNCTION__,
+							  GetSockError());
+					  goto cleanup;	// we are in STREAMING_IN_PROGRESS, so we'll go to STREAMING_ACCEPTING
+				  }
+
+				  size += nRead;
+
+				  //RTMP_LogPrintf("write %dbytes (%.1f KB)\n", nRead, nRead/1024.0);
+				  if (duration <= 0)	// if duration unknown try to get it from the stream (onMetaData)
+					  duration = RTMP_GetDuration(&rtmp);
+
+				  if (duration > 0)
+				  {
+					  percent =
+						  ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
+						  1000.0) * 100.0;
+					  percent = ((double) (int) (percent * 10.0)) / 10.0;
+					  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
+							  (double) size / 1024.0,
+							  (double) (rtmp.m_read.timestamp) / 1000.0, percent);
+				  }
+				  else
+				  {
+					  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
+							  (double) (rtmp.m_read.timestamp) / 1000.0);
+				  }
+			  }
+#ifdef _DEBUG
+			  else
+			  {
+				  RTMP_Log(RTMP_LOGDEBUG, "zero read!");
+			  }
 #endif
-	}
-      while (server->state == STREAMING_IN_PROGRESS && nRead > -1
-	     && RTMP_IsConnected(&rtmp) && nWritten >= 0);
-    }
-    }
+		  }
+		  while (server->state == STREAMING_IN_PROGRESS && nRead > -1
+				  && RTMP_IsConnected(&rtmp) && nWritten >= 0);
+		  if(nWritten < 0)//the connection to client is closed
+		  {
+			RTMP_LogPrintf("Connection to client is closed.");
+			break;
+		  }
+	  }
+
+  }
 cleanup:
   RTMP_LogPrintf("Closing connection... ");
   RTMP_Close(&rtmp);
