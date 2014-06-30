@@ -41,6 +41,8 @@
 #define PACKET_SIZE 1024*1024
 
 #define HTTP_THREAD_NUM 1000
+#define MAX_RETRY_TIME  100
+
 #ifdef WIN32
 #define InitSockets()	{\
         WORD version;			\
@@ -565,14 +567,21 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   rtmp.Link.extras = req.extras;
   rtmp.Link.token = req.token;
   rtmp.m_read.timestamp = dSeek;
+  int retryTimes = 0;
 
   while(server->state != STREAMING_STOPPING)
   {
 	  RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
 	  if (!RTMP_Connect(&rtmp, NULL))
 	  {
-		  RTMP_LogPrintf("%s, failed to connect!\n", __FUNCTION__);
+		  retryTimes ++;
+		  RTMP_LogPrintf("%s, failed to connect!Retry[%d] 1s later.\n", __FUNCTION__, retryTimes);
 		  sleep(1);
+		  if(retryTimes > MAX_RETRY_TIME)
+		  {
+			RTMP_LogPrintf("Retry too much,canel request!");
+			break;
+		  }
 	  }
 	  else
 	  {
