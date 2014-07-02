@@ -49,11 +49,12 @@ static void rtmp_log_default(int level, const char *format, va_list vl)
 {
 	char str[MAX_PRINT_LEN]="";
 
-	vsnprintf(str, MAX_PRINT_LEN-1, format, vl);
 
 	/* Filter out 'no-name' */
 	if ( RTMP_debuglevel<RTMP_LOGALL && strstr(str, "no-name" ) != NULL )
 		return;
+	
+	vsnprintf(str, MAX_PRINT_LEN-1, format, vl);
 
 	if ( !fmsg ) fmsg = stderr;
 
@@ -177,6 +178,11 @@ void RTMP_LogHexString(int level, const uint8_t *data, unsigned long len)
 /* These should only be used by apps, never by the library itself */
 void RTMP_LogPrintf(const char *format, ...)
 {
+
+
+	if ( RTMP_debuglevel==RTMP_LOGCRIT )
+		return;
+
 	char str[MAX_PRINT_LEN]="";
 	int len;
 	va_list args;
@@ -184,8 +190,6 @@ void RTMP_LogPrintf(const char *format, ...)
 	len = vsnprintf(str, MAX_PRINT_LEN-1, format, args);
 	va_end(args);
 
-	if ( RTMP_debuglevel==RTMP_LOGCRIT )
-		return;
 
 	if ( !fmsg ) fmsg = stderr;
 
@@ -203,14 +207,16 @@ void RTMP_LogPrintf(const char *format, ...)
 
 void RTMP_LogStatus(const char *format, ...)
 {
+
+	if ( RTMP_debuglevel==RTMP_LOGCRIT )
+		return;
+
 	char str[MAX_PRINT_LEN]="";
 	va_list args;
 	va_start(args, format);
 	vsnprintf(str, MAX_PRINT_LEN-1, format, args);
 	va_end(args);
 
-	if ( RTMP_debuglevel==RTMP_LOGCRIT )
-		return;
 
 	if ( !fmsg ) fmsg = stderr;
 

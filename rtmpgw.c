@@ -617,14 +617,14 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 						  ((double) (dSeek + rtmp.m_read.timestamp)) / (duration *
 						  1000.0) * 100.0;
 					  percent = ((double) (int) (percent * 10.0)) / 10.0;
-					  RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
+					  /*RTMP_LogStatus("\r%.3f KB / %.2f sec (%.1f%%)",
 							  (double) size / 1024.0,
-							  (double) (rtmp.m_read.timestamp) / 1000.0, percent);
+							  (double) (rtmp.m_read.timestamp) / 1000.0, percent);*/
 				  }
 				  else
 				  {
-					  RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
-							  (double) (rtmp.m_read.timestamp) / 1000.0);
+					 /* RTMP_LogStatus("\r%.3f KB / %.2f sec", (double) size / 1024.0,
+							  (double) (rtmp.m_read.timestamp) / 1000.0);*/
 				  }
 			  }
 #ifdef _DEBUG
