@@ -741,6 +741,7 @@ startStreaming(const char *address, int port)
     server->socket = sockfd;
 
     ThreadCreate(serverThread, server);
+	httpServers[i] = server;
   }
   return server;
 }
