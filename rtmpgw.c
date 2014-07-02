@@ -75,6 +75,8 @@ typedef struct
 STREAMING_SERVER *httpServers[HTTP_THREAD_NUM];
 int allStopped = 0;
 
+pthread_mutex_t mutex;
+
 STREAMING_SERVER *startStreaming(const char *address, int port);
 void stopStreaming(STREAMING_SERVER * server);
 void stopAllStreamings();
@@ -555,7 +557,9 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
     }
 
   RTMP_Log(RTMP_LOGDEBUG, "Setting buffer time to: %dms", req.bufferTime);
+  pthread_mutex_lock(&mutex);
   RTMP_Init(&rtmp);
+  pthread_mutex_unlock(&mutex);
   RTMP_SetBufferMS(&rtmp, req.bufferTime);
   RTMP_SetupStream(&rtmp, req.protocol, &req.hostname, req.rtmpport, &req.sockshost,
 		   &req.playpath, &req.tcUrl, &req.swfUrl, &req.pageUrl, &req.app, &req.auth, &req.swfHash, req.swfSize, &req.flashVer, &req.subscribepath, &req.usherToken, dSeek, req.dStopOffset,
@@ -646,7 +650,9 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   }
 cleanup:
   RTMP_LogPrintf("Closing connection... ");
+  pthread_mutex_lock(&mutex);
   RTMP_Close(&rtmp);
+  pthread_mutex_unlock(&mutex);
   RTMP_LogPrintf("done!\n\n");
 
 quit:
