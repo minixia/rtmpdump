@@ -80,6 +80,7 @@ pthread_mutex_t mutex;
 STREAMING_SERVER *startStreaming(const char *address, int port);
 void stopStreaming(STREAMING_SERVER * server);
 void stopAllStreamings();
+void changeServerState(STREAMING_SERVER * server, int state);
 
 typedef struct
 {
@@ -331,6 +332,13 @@ int isHTTPRequestEOF(char *line, size_t length)
 }
 */
 
+void changeServerState(STREAMING_SERVER * server, int state)
+{
+  pthread_mutex_lock(&mutex);
+  server->state = state;
+  pthread_mutex_unlock(&mutex);
+}
+
 void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (our listening socket)
 		       int sockfd	// client connection socket
   )
@@ -348,7 +356,7 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 
   char *status = "404 Not Found";
 
-  server->state = STREAMING_IN_PROGRESS;
+  changeServerState(server, STREAMING_IN_PROGRESS);
 
   RTMP rtmp = { 0 };
   uint32_t dSeek = 0;		// can be used to start from a later point in the stream
@@ -381,16 +389,6 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 
       RTMP_Log(RTMP_LOGDEBUG, "%s: header: %s", __FUNCTION__, header);
 
-      if (strstr(header, "Range: bytes=") != 0)
-	{
-	  // TODO check range starts from 0 and asking till the end.
-	  RTMP_LogPrintf("%s, Range request not supported\n", __FUNCTION__);
-	  len = sprintf(buf, "HTTP/1.0 416 Requested Range Not Satisfiable%s\r\n",
-		  srvhead);
-	  send(sockfd, buf, len, 0);
-	  goto quit;
-	}
-
       if (strncmp(header, "GET", 3) == 0 && nRead > 4)
 	{
 	  filename = header + 4;
@@ -413,56 +411,17 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   // if we got a filename from the GET method
   if (filename != NULL)
     {
-      RTMP_Log(RTMP_LOGDEBUG, "%s: Request header: %s", __FUNCTION__, filename);
+      RTMP_Log(RTMP_LOGERROR, "%s: Request header: %s", __FUNCTION__, filename);
       if (filename[0] == '/')
-	{			// if its not empty, is it /?
-	  ptr = filename + 1;
-
-	  // parse parameters
-	  if (*ptr == '?')
-	    {
-	      ptr++;
-	      int len = strlen(ptr);
-
-	      while (len >= 2)
-		{
-		  char ich = *ptr;
-		  ptr++;
-		  if (*ptr != '=')
-		    goto filenotfound;	// long parameters not (yet) supported
-
-		  ptr++;
-		  len -= 2;
-
-		  // get position of the next '&'
-		  char *temp;
-
-		  unsigned int nArgLen = len;
-		  if ((temp = strstr(ptr, "&")) != 0)
-		    {
-		      nArgLen = temp - ptr;
-		    }
-
-		  char *arg = (char *) malloc((nArgLen + 1) * sizeof(char));
-		  memcpy(arg, ptr, nArgLen * sizeof(char));
-		  arg[nArgLen] = '\0';
-
-		  //RTMP_Log(RTMP_LOGDEBUG, "%s: unescaping parameter: %s", __FUNCTION__, arg);
-		  http_unescape(arg);
-
-		  RTMP_Log(RTMP_LOGDEBUG, "%s: parameter: %c, arg: %s", __FUNCTION__,
-		      ich, arg);
-
-		  ptr += nArgLen + 1;
-		  len -= nArgLen + 1;
-
-		  if (!ParseOption(ich, arg, &req))
-		    {
-		      status = "400 unknown option";
-		      goto filenotfound;
-		    }
-		}
-	    }
+	{
+		char *suffix = strstr(filename, ".flv");
+		if(suffix){
+			*suffix = '\0';
+		}	
+		char url[2048];
+		sprintf(url, "%s%s", req.rtmpurl, filename);
+		char opt = 'r';
+		ParseOption(opt, &url, &req);
 	}
       else
 	{
@@ -513,14 +472,13 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
 	req.rtmpport = 1935;
     }
 
+  char tcUrl[512];
   if (req.tcUrl.av_len == 0)
     {
-      char str[512] = { 0 };
-      req.tcUrl.av_len = snprintf(str, 511, "%s://%.*s:%d/%.*s",
+      req.tcUrl.av_len = snprintf(tcUrl, 511, "%s://%.*s:%d/%.*s",
 	RTMPProtocolStringsLower[req.protocol], req.hostname.av_len,
 	req.hostname.av_val, req.rtmpport, req.app.av_len, req.app.av_val);
-      req.tcUrl.av_val = (char *) malloc(req.tcUrl.av_len + 1);
-      strcpy(req.tcUrl.av_val, str);
+      req.tcUrl.av_val = &tcUrl;
     }
 
   if (req.swfVfy)
@@ -576,7 +534,11 @@ void processTCPrequest(STREAMING_SERVER * server,	// server socket and state (ou
   while(server->state != STREAMING_STOPPING)
   {
 	  RTMP_LogPrintf("Connecting ... port: %d, app: %s\n", req.rtmpport, req.app.av_val);
-	  if (!RTMP_Connect(&rtmp, NULL))
+      int ret = 0;
+      pthread_mutex_lock(&mutex);
+      ret = RTMP_Connect(&rtmp, NULL);
+      pthread_mutex_unlock(&mutex);
+	  if (!ret)
 	  {
 		  retryTimes ++;
 		  RTMP_LogPrintf("%s, failed to connect!Retry[%d] 1s later.\n", __FUNCTION__, retryTimes);
@@ -666,7 +628,7 @@ quit:
     closesocket(sockfd);
 
   if (server->state == STREAMING_IN_PROGRESS)
-    server->state = STREAMING_ACCEPTING;
+    changeServerState(server, STREAMING_ACCEPTING);
 
   return;
 
@@ -681,7 +643,7 @@ TFTYPE
 serverThread(void *arg)
 {
   STREAMING_SERVER *server = arg;
-  server->state = STREAMING_ACCEPTING;
+  changeServerState(server ,  STREAMING_ACCEPTING);
 
   while (server->state == STREAMING_ACCEPTING)
     {
@@ -703,7 +665,7 @@ serverThread(void *arg)
 	  RTMP_Log(RTMP_LOGERROR, "%s: accept failed", __FUNCTION__);
 	}
     }
-  server->state = STREAMING_STOPPED;
+  changeServerState(server ,  STREAMING_STOPPED);
   TFRET();
 }
 
@@ -744,6 +706,11 @@ startStreaming(const char *address, int port)
   for(i=0;i<HTTP_THREAD_NUM;i++)
   {
     server = (STREAMING_SERVER *) calloc(1, sizeof(STREAMING_SERVER));
+    if(server == NULL)
+    {
+      RTMP_LogPrintf("alloc server failed, stop prog!");
+      exit(-1);
+    }
     server->socket = sockfd;
 
     ThreadCreate(serverThread, server);
@@ -772,7 +739,7 @@ stopStreaming(STREAMING_SERVER * server)
     {
       if (server->state == STREAMING_IN_PROGRESS)
 	{
-	  server->state = STREAMING_STOPPING;
+	  changeServerState(server , STREAMING_STOPPING);
 
 	  // wait for streaming threads to exit
 	  while (server->state != STREAMING_STOPPED)
@@ -780,10 +747,10 @@ stopStreaming(STREAMING_SERVER * server)
 	}
 
       if (closesocket(server->socket))
-	RTMP_Log(RTMP_LOGERROR, "%s: Failed to close listening socket, error %d",
-	    __FUNCTION__, GetSockError());
+	//RTMP_Log(RTMP_LOGERROR, "%s: Failed to close listening socket, error %d",
+	//    __FUNCTION__, GetSockError());
 
-      server->state = STREAMING_STOPPED;
+      changeServerState(server ,  STREAMING_STOPPED);
     }
 }
 
@@ -937,7 +904,7 @@ ParseOption(char opt, char *arg, RTMP_REQUEST * req)
 	      req->hostname = parsedHost;
 	    if (req->rtmpport == -1)
 	      req->rtmpport = parsedPort;
-	    if (req->playpath.av_len == 0 && parsedPlaypath.av_len)
+	    if (parsedPlaypath.av_len)
 	      {
 		    req->playpath = parsedPlaypath;
 	      }
